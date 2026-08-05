@@ -1,0 +1,28 @@
+[project]
+name = "browseruse-ft"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "altair>=6.2.2",
+    "click>=8.3.1",
+    "datasets>=5.0.1",
+    "duckdb>=1.5.5",
+    "fireworks-ai>=1.2.6",
+    "marimo[mcp]>=0.23.16",
+    "playwright>=1.62.0",
+    "polars>=1.43.2",
+    "python-dotenv>=1.2.2",
+    "sqlglot>=30.15.0",
+]
+
+[project.scripts]
+browseruse-data = "browseruse_ft.cli:download_data"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
