@@ -3,10 +3,11 @@
   <h1>Finetuning for long-horizon tasks</h1>
 </div>
 
-Model fine-tuning often optimizes isolated responses. Here, we are exploring how to fine-tune for long-horizon tasks. The environment is a browser, where a subagent learns a policy from observations, actions, and their outcomes.*
+*Model fine-tuning often optimizes isolated responses. Here, we are exploring how to fine-tune for long-horizon tasks. The environment is a browser, where a subagent learns a policy from observations, actions, and their outcomes.*
 
 ---
 
+model cards `qwen3.5-9B`
 
 
 ## References

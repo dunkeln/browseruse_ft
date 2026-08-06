@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Local Fireworks run records
+fireworks-training-runs/

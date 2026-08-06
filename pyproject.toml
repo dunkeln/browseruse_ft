@@ -14,11 +14,13 @@ dependencies = [
     "playwright>=1.62.0",
     "polars>=1.43.2",
     "python-dotenv>=1.2.2",
+    "rich>=15.0.0",
     "sqlglot>=30.15.0",
 ]
 
 [project.scripts]
 browseruse-data = "browseruse_ft.cli:download_data"
+browseruse-sft = "browseruse_ft.cli:prepare_sft"
 
 [build-system]
 requires = ["setuptools>=77"]

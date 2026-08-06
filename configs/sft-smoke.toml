@@ -1,0 +1,30 @@
+[fireworks]
+account_id = "prateekpravanjan"
+base_model = "accounts/fireworks/models/qwen3p5-9b"
+dataset_id = "browseruse-webarena-sft-smoke-b652d4d6"
+job_id = "browseruse-qwen35-9b-sft-smoke10m-20260806"
+output_model = "accounts/prateekpravanjan/models/browseruse-qwen35-9b-sft-smoke10m-20260806"
+
+[dataset]
+path = "data/processed/webarena-lite-sft-smoke.jsonl"
+rows = 64
+
+[training]
+batch_size_samples = 4
+epochs = 1
+learning_rate = 0.0001
+learning_rate_warmup_steps = 0
+lora_rank = 8
+max_context_length = 8192
+optimizer_weight_decay = 0.01
+early_stop = false
+eval_auto_carveout = false
+
+[wandb]
+enabled = true
+entity = "dunkeln"
+project = "browseruse-ft"
+
+[monitor]
+seconds = 600
+interval = 30
