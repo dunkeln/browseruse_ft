@@ -2,18 +2,16 @@
 
 import json
 from collections import defaultdict
-from hashlib import sha256
 
 from datasets import Dataset
 
 from browseruse_ft.preprocess.policy import render_policy_messages
 
 
-def _fingerprint(value: object) -> str:
-    payload = json.dumps(
+def _canonical_key(value: object) -> str:
+    return json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     )
-    return sha256(payload.encode()).hexdigest()
 
 
 def preprocess(dataset: Dataset) -> tuple[Dataset, Dataset, dict[str, int]]:
@@ -24,13 +22,13 @@ def preprocess(dataset: Dataset) -> tuple[Dataset, Dataset, dict[str, int]]:
     duplicates = 0
 
     for source_row, row in enumerate(dataset):
-        row_key = _fingerprint(row)
+        row_key = _canonical_key(row)
         if row_key in seen_rows:
             duplicates += 1
             continue
         seen_rows.add(row_key)
 
-        input_key = _fingerprint(
+        input_key = _canonical_key(
             [row["problem"], row["history"], row["observation"]]
         )
         targets_by_input[input_key].add((row["remarks"], row["solution"]))

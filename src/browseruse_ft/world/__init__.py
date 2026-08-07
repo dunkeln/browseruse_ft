@@ -1,5 +1,5 @@
 """Browser evaluation environment."""
 
-from .observation import render_observation
+from .observation import observe_url, render_observation
 
-__all__ = ["render_observation"]
+__all__ = ["observe_url", "render_observation"]

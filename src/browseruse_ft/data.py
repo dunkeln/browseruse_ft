@@ -29,6 +29,7 @@ TASK_DATASETS = {
 }
 
 SFT_TEST_FRACTION = 0.2
+SFT_FOLDS = 3
 EXTRA_TEST_TASKS = 130
 
 WEBARENA_TASKS_URL = (
@@ -50,15 +51,22 @@ def _held_out_values(values: list, count: int) -> set:
 
 
 def load_hub_dataset(
-    card: str, split: str = "train", rows: int | None = None
+    card: str,
+    split: str = "train",
+    rows: int | None = None,
+    fold: int | None = None,
 ) -> Dataset:
-    """Load a deterministic, problem-disjoint SFT train or test split."""
+    """Load a deterministic, problem-disjoint SFT split or training fold."""
     if card not in DATASET_CARDS:
         raise ValueError(f"Unknown dataset card: {card}")
-    if split not in {"train", "test"}:
+    if split not in {"train", "validation", "test"}:
         raise ValueError(f"Unknown split: {split}")
     if rows is not None and rows < 1:
         raise ValueError("rows must be positive")
+    if split == "validation" and fold is None:
+        raise ValueError("validation requires a fold")
+    if fold is not None and (split == "test" or fold not in range(SFT_FOLDS)):
+        raise ValueError(f"fold must be 0-{SFT_FOLDS - 1} for train/validation")
 
     config = DATASET_CARDS[card]
     source = load_dataset(
@@ -72,13 +80,36 @@ def load_hub_dataset(
     test_problems = _held_out_values(
         source["problem"], ceil(len(set(source["problem"])) * SFT_TEST_FRACTION)
     )
-    dataset = source.select(
+    training_pool = source.select(
         [
             index
             for index, problem in enumerate(source["problem"])
-            if (problem in test_problems) == (split == "test")
+            if problem not in test_problems
         ]
     )
+    if split == "test":
+        dataset = source.select(
+            [
+                index
+                for index, problem in enumerate(source["problem"])
+                if problem in test_problems
+            ]
+        )
+    elif fold is None:
+        dataset = training_pool
+    else:
+        problems = sorted(
+            set(training_pool["problem"]),
+            key=lambda problem: sha256(problem.encode()).digest(),
+        )
+        validation_problems = set(problems[fold::SFT_FOLDS])
+        dataset = training_pool.select(
+            [
+                index
+                for index, problem in enumerate(training_pool["problem"])
+                if (problem in validation_problems) == (split == "validation")
+            ]
+        )
     if rows is None:
         return dataset
     return dataset.select(range(min(rows, dataset.num_rows)))

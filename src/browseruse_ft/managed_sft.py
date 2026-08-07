@@ -1,4 +1,4 @@
-"""Run a managed-SFT smoke from declarative config."""
+"""Run managed SFT from a declarative experiment config."""
 
 import json
 import os
@@ -20,7 +20,7 @@ from rich.progress import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = PROJECT_ROOT / "configs/sft-smoke.toml"
+RUNS_PATH = PROJECT_ROOT / "fireworks-training-runs"
 TERMINAL_STATES = {
     "JOB_STATE_CANCELLED",
     "JOB_STATE_COMPLETED",
@@ -31,13 +31,49 @@ TERMINAL_STATES = {
 }
 
 
-def _load_config() -> dict:
-    with CONFIG_PATH.open("rb") as source:
+def _load_config(path: Path) -> dict:
+    with path.open("rb") as source:
         return tomllib.load(source)
 
 
-def _validate_dataset(config: dict) -> int:
-    path = PROJECT_ROOT / config["dataset"]["path"]
+def _source_model(config: dict) -> tuple[str, str]:
+    settings = config["fireworks"]
+    sources = [key for key in ("base_model", "warm_start_from") if settings.get(key)]
+    if len(sources) != 1:
+        raise ValueError("set exactly one of fireworks.base_model or warm_start_from")
+    key = sources[0]
+    return key, settings[key]
+
+
+def _record_run(config: dict, job) -> Path:
+    source_kind, source_model = _source_model(config)
+    status = getattr(job, "status", None)
+    record = {
+        "schema_version": 1,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "config": config,
+        "lineage": {"source_kind": source_kind, "source_model": source_model},
+        "job": {
+            "name": getattr(job, "name", None),
+            "state": job.state,
+            "status": getattr(status, "message", None),
+            "output_model": getattr(job, "output_model", None),
+            "wandb_url": getattr(getattr(job, "wandb_config", None), "url", None),
+        },
+    }
+    if job.state == "JOB_STATE_COMPLETED":
+        record["lineage"]["next_warm_start_from"] = job.output_model
+
+    destination = RUNS_PATH / config["fireworks"]["job_id"] / "run.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(".tmp")
+    temporary.write_text(json.dumps(record, indent=2) + "\n")
+    temporary.replace(destination)
+    return destination
+
+
+def _validate_dataset(dataset: dict) -> int:
+    path = PROJECT_ROOT / dataset["path"]
     rows = 0
     with path.open() as source:
         for line_number, line in enumerate(source, start=1):
@@ -48,9 +84,9 @@ def _validate_dataset(config: dict) -> int:
             if any(not message.get("content") for message in row["messages"]):
                 raise ValueError(f"line {line_number}: empty message content")
             rows += 1
-    expected = config["dataset"]["rows"]
+    expected = dataset["rows"]
     if rows != expected:
-        raise ValueError(f"expected {expected} smoke rows, found {rows}")
+        raise ValueError(f"expected {expected} rows in {path}, found {rows}")
     return rows
 
 
@@ -76,9 +112,13 @@ def _client(config: dict) -> Fireworks:
     )
 
 
-def _ensure_dataset(client: Fireworks, config: dict, rows: int) -> str:
-    settings = config["fireworks"]
-    dataset_id = settings["dataset_id"]
+def _ensure_dataset(
+    client: Fireworks,
+    account_id: str,
+    dataset_id: str,
+    dataset_config: dict,
+    rows: int,
+) -> str:
     try:
         dataset = client.datasets.get(dataset_id)
     except NotFoundError:
@@ -91,7 +131,7 @@ def _ensure_dataset(client: Fireworks, config: dict, rows: int) -> str:
                 "user_uploaded": {},
             },
         )
-        with (PROJECT_ROOT / config["dataset"]["path"]).open("rb") as source:
+        with (PROJECT_ROOT / dataset_config["path"]).open("rb") as source:
             client.datasets.upload(dataset_id, file=source)
 
     deadline = time.monotonic() + 120
@@ -104,32 +144,44 @@ def _ensure_dataset(client: Fireworks, config: dict, rows: int) -> str:
         raise RuntimeError(
             f"existing dataset has {dataset.example_count} rows, expected {rows}"
         )
-    return f"accounts/{settings['account_id']}/datasets/{dataset_id}"
+    return f"accounts/{account_id}/datasets/{dataset_id}"
 
 
-def _create_job(client: Fireworks, config: dict, dataset: str):
+def _create_job(
+    client: Fireworks,
+    config: dict,
+    dataset: str,
+    evaluation_dataset: str | None,
+):
     settings = config["fireworks"]
     job_id = settings["job_id"]
+    source_kind, source_model = _source_model(config)
     try:
         job = client.supervised_fine_tuning_jobs.get(job_id)
     except NotFoundError:
-        return client.supervised_fine_tuning_jobs.create(
-            supervised_fine_tuning_job_id=job_id,
-            dataset=dataset,
-            base_model=settings["base_model"],
-            output_model=settings["output_model"],
+        create = {
+            "supervised_fine_tuning_job_id": job_id,
+            "dataset": dataset,
+            "output_model": settings["output_model"],
+            source_kind: source_model,
             **config["training"],
-            wandb_config={
+            "wandb_config": {
                 **config["wandb"],
                 "api_key": os.environ["WANDB_API_KEY"],
             },
-        )
+        }
+        if evaluation_dataset:
+            create["evaluation_dataset"] = evaluation_dataset
+        return client.supervised_fine_tuning_jobs.create(**create)
 
     expected = {
         "dataset": dataset,
-        "base_model": settings["base_model"],
+        source_kind: source_model,
+        "output_model": settings["output_model"],
         **config["training"],
     }
+    if evaluation_dataset:
+        expected["evaluation_dataset"] = evaluation_dataset
     mismatches = {
         field: (getattr(job, field), value)
         for field, value in expected.items()
@@ -140,54 +192,75 @@ def _create_job(client: Fireworks, config: dict, dataset: str):
     return job
 
 
-def _delete_active_job(client: Fireworks, job_id: str) -> None:
-    job = client.supervised_fine_tuning_jobs.get(job_id)
-    if job.state in TERMINAL_STATES:
-        return
-    client.supervised_fine_tuning_jobs.delete(job_id)
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        try:
-            state = client.supervised_fine_tuning_jobs.get(job_id).state
-        except NotFoundError:
-            state = "JOB_STATE_DELETED"
-        print(f"{datetime.now(timezone.utc).isoformat()} state={state}")
-        if state in TERMINAL_STATES:
-            return
-        time.sleep(10)
-    raise RuntimeError("job deletion was not confirmed within 60 seconds")
-
-
-def run_smoke(*, confirm: bool = False):
-    """Upload, train, observe, and delete the configured managed-SFT smoke."""
-    config = _load_config()
-    rows = _validate_dataset(config)
+def run_sft(config_path: Path, *, confirm: bool = False):
+    """Upload, train, and monitor one configured managed SFT run."""
+    config = _load_config(config_path)
+    train_rows = _validate_dataset(config["dataset"])
+    evaluation_rows = (
+        _validate_dataset(config["evaluation_dataset"])
+        if "evaluation_dataset" in config
+        else None
+    )
     if not confirm:
         raise ValueError("paid Fireworks mutation requires confirm=True")
 
     job_id = config["fireworks"]["job_id"]
     monitor = config["monitor"]
     with _client(config) as client:
-        dataset = _ensure_dataset(client, config, rows)
-        job = _create_job(client, config, dataset)
-        deadline = time.monotonic() + monitor["seconds"]
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-            ) as progress:
-                task = progress.add_task(job.state, total=100)
-                while True:
-                    job = client.supervised_fine_tuning_jobs.get(job_id)
-                    percent = getattr(job.job_progress, "percent", 0) or 0
-                    progress.update(task, completed=percent, description=job.state)
-                    if job.state in TERMINAL_STATES or time.monotonic() >= deadline:
-                        break
-                    time.sleep(min(monitor["interval"], deadline - time.monotonic()))
-            return job
-        finally:
-            if job.state not in TERMINAL_STATES:
-                _delete_active_job(client, job_id)
+        settings = config["fireworks"]
+        dataset = _ensure_dataset(
+            client,
+            settings["account_id"],
+            settings["dataset_id"],
+            config["dataset"],
+            train_rows,
+        )
+        evaluation_dataset = (
+            _ensure_dataset(
+                client,
+                settings["account_id"],
+                settings["evaluation_dataset_id"],
+                config["evaluation_dataset"],
+                evaluation_rows,
+            )
+            if evaluation_rows is not None
+            else None
+        )
+        job = _create_job(client, config, dataset, evaluation_dataset)
+        record_path = _record_run(config, job)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("epoch {task.fields[epoch]}"),
+            TextColumn("requests {task.fields[requests]}"),
+            TextColumn("tokens {task.fields[tokens]}"),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task(
+                job.state, total=100, epoch=0, requests="0/0", tokens=0
+            )
+            if wandb_url := getattr(job.wandb_config, "url", None):
+                progress.console.print(f"W&B metrics: {wandb_url}")
+            while job.state not in TERMINAL_STATES:
+                job = client.supervised_fine_tuning_jobs.get(job_id)
+                _record_run(config, job)
+                job_progress = job.job_progress
+                status = getattr(job.status, "message", "")
+                progress.update(
+                    task,
+                    completed=getattr(job_progress, "percent", 0) or 0,
+                    description=status or job.state,
+                    epoch=getattr(job_progress, "epoch", 0) or 0,
+                    requests=(
+                        f"{getattr(job_progress, 'total_processed_requests', 0) or 0}/"
+                        f"{getattr(job_progress, 'total_input_requests', 0) or 0}"
+                    ),
+                    tokens=getattr(job_progress, "input_tokens", 0) or 0,
+                )
+                if job.state not in TERMINAL_STATES:
+                    time.sleep(monitor["interval"])
+        _record_run(config, job)
+        print(f"Run record: {record_path}")
+        return job

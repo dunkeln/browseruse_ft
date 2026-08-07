@@ -9,14 +9,13 @@ SYSTEM_PROMPT = (
 
 def render_policy_messages(example: dict) -> list[dict[str, str]]:
     """Build the prompt shared by SFT and later RFT examples."""
-    history = ["Previous observations omitted."]
-    for index, step in enumerate(example["history"], start=1):
-        history.append(f"{index}. {step['action']}")
-        if step["remarks"]:
-            history.append(f"   Remark: {step['remarks']}")
+    history = [
+        f"{index}. {step['action']}"
+        for index, step in enumerate(example["history"], start=1)
+    ]
     prompt = (
         f"Goal:\n{example['task']}\n\n"
-        f"Previous actions:\n{'\n'.join(history)}\n\n"
+        f"Previous actions:\n{'\n'.join(history) if history else 'None'}\n\n"
         f"Current page:\n{example['current_observation']}"
     )
     return [
