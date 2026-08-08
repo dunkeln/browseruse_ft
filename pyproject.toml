@@ -9,6 +9,8 @@ dependencies = [
     "click>=8.3.1",
     "datasets>=5.0.1",
     "duckdb>=1.5.5",
+    "eval-protocol>=0.3.32",
+    "fastapi>=0.141.1",
     "fireworks-ai>=1.2.6",
     "marimo[mcp]>=0.23.16",
     "playwright>=1.62.0",
@@ -16,6 +18,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
     "sqlglot>=30.15.0",
+    "uvicorn>=0.52.1",
 ]
 
 [project.scripts]
@@ -23,6 +26,9 @@ browseruse-data = "browseruse_ft.cli:download_data"
 browseruse-sft = "browseruse_ft.cli:prepare_sft"
 browseruse-train = "browseruse_ft.cli:train_sft"
 browseruse-world = "browseruse_ft.cli:world_smoke"
+browseruse-auth = "browseruse_ft.cli:save_auth"
+browseruse-rft-smoke = "browseruse_ft.cli:rft_smoke"
+browseruse-rollout = "browseruse_ft.cli:model_rollout"
 
 [build-system]
 requires = ["setuptools>=77"]

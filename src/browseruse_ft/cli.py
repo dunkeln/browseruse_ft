@@ -13,8 +13,10 @@ from browseruse_ft.data import (
     write_jsonl,
 )
 from browseruse_ft.managed_sft import run_sft
+from browseruse_ft.model_rollout import run_model_rollouts
 from browseruse_ft.preprocess.main import preprocess_sft
-from browseruse_ft.world import observe_url
+from browseruse_ft.world import capture_storage_state, observe_url
+from browseruse_ft.world.smoke import run_calibration
 
 
 @click.command()
@@ -99,9 +101,55 @@ def train_sft(config: Path, confirm: bool) -> None:
 @click.command()
 @click.argument("url")
 @click.option("--headed", is_flag=True, help="Show the Chromium window.")
-def world_smoke(url: str, headed: bool) -> None:
+@click.option(
+    "--storage-state",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    help="Playwright authentication state JSON.",
+)
+def world_smoke(url: str, headed: bool, storage_state: Path | None) -> None:
     """Open URL in an isolated Playwright world and print its observation."""
     try:
-        click.echo(asyncio.run(observe_url(url, headed=headed)))
+        click.echo(
+            asyncio.run(observe_url(url, headed=headed, storage_state=storage_state))
+        )
     except ValueError as error:
         raise click.ClickException(str(error)) from error
+
+
+@click.command()
+@click.argument("url")
+@click.argument("output", type=click.Path(path_type=Path, dir_okay=False))
+def save_auth(url: str, output: Path) -> None:
+    """Open a login page and save Playwright authentication state."""
+    try:
+        click.echo(asyncio.run(capture_storage_state(url, output.resolve())))
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+
+
+@click.command()
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=Path("data/eval/reward-distribution.jsonl"),
+    show_default=True,
+)
+def rft_smoke(output: Path) -> None:
+    """Run local browser rollouts and materialize reward calibration rows."""
+    rows = run_calibration(output.resolve())
+    click.echo(f"rollouts={len(rows)} artifact={output.resolve()}")
+
+
+@click.command()
+@click.argument(
+    "config", type=click.Path(path_type=Path, exists=True, dir_okay=False)
+)
+@click.option("--confirm", is_flag=True, help="Confirm paid Fireworks inference.")
+def model_rollout(config: Path, confirm: bool) -> None:
+    """Run model-driven browser rollouts defined by CONFIG."""
+    try:
+        output = run_model_rollouts(config.resolve(), confirm=confirm)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    if output is not None:
+        click.echo(f"artifact={output.resolve()}")

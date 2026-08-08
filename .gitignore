@@ -9,6 +9,7 @@ wheels/
 # Virtual environments
 .venv
 .env
+.auth/
 
 # Local Fireworks run records
 fireworks-training-runs/
