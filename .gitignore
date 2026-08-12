@@ -1,16 +1,8 @@
-# Python-generated files
 __pycache__/
 *.py[oc]
+*.egg-info/
+.env*
+.pytest_cache/
+.venv/
 build/
 dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-.env
-.auth/
-
-# Local Fireworks run records
-fireworks-training-runs/
-data/

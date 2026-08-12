@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "browser": {
+      "command": "python",
+      "args": ["evaluator/browser.py"]
+    }
+  }
+}

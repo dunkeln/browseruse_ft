@@ -1,9 +1,0 @@
-.git
-.venv
-.env
-.auth
-data
-fireworks-training-runs
-notebooks
-__pycache__
-*.pyc
