@@ -16,7 +16,9 @@ from playwright.async_api import Browser, Page, Playwright, async_playwright
 
 load_dotenv()
 
-TASKS_PATH = Path(__file__).with_name("tasks.jsonl")
+TASKS_PATH = Path(
+    os.environ.get("BROWSERUSE_TASKS_PATH", Path(__file__).with_name("tasks.jsonl"))
+)
 TASKS = {
     row["input_metadata"]["row_id"]: row["input_metadata"]["session_data"]
     for line in TASKS_PATH.read_text().splitlines()
@@ -34,9 +36,7 @@ _lock = asyncio.Lock()
 
 
 def _api_key() -> str:
-    key = os.environ.get("BROWSER_USE_API_KEY") or os.environ.get(
-        "BROWSERUSE_API_KEY"
-    )
+    key = os.environ.get("BROWSER_USE_API_KEY") or os.environ.get("BROWSERUSE_API_KEY")
     if not key:
         raise RuntimeError("BROWSER_USE_API_KEY or BROWSERUSE_API_KEY is required")
     return key
@@ -119,8 +119,18 @@ async def open_task(task_id: str) -> str:
             _playwright = await async_playwright().start()
             _browser = await _playwright.chromium.connect_over_cdp(session.cdp_url)
             context = _browser.contexts[0]
-            _page = context.pages[0] if context.pages else await context.new_page()
-            await _page.set_content(task["html"])
+            # Remote lifecycle events can lag; write the isolated task directly.
+            _page = await context.new_page()
+            await _page.evaluate(
+                """html => {
+                  window.stop();
+                  document.open();
+                  document.write(html);
+                  document.close();
+                }""",
+                task["html"],
+            )
+            await _page.wait_for_selector("body")
             _task_id = task_id
             return json.dumps(await _observe())
         except BaseException:

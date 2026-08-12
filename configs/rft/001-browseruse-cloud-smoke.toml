@@ -1,0 +1,48 @@
+schema_version = 1
+
+[run]
+job_id = "browseruse-q3vl8b-rft-smoke-v1"
+
+[fireworks]
+account_id = "prateekpravanjan"
+
+[evaluator]
+id = "browseruse-cloud"
+entry = "evaluator/test_browseruse.py::test_browseruse"
+secret_env = "BROWSERUSE_API_KEY"
+
+[dataset]
+path = "evaluator/tasks.jsonl"
+rows = 8
+
+[evaluation]
+path = "evaluator/heldout_tasks.jsonl"
+rows = 2
+
+[model]
+base_model = "accounts/fireworks/models/qwen3-vl-8b-instruct"
+output_model = "browseruse-q3vl8b-rft-smoke-v1"
+
+[rollout]
+response_candidates_count = 2
+max_concurrent_rollouts = 1
+max_concurrent_evaluations = 1
+chunk_size = 4
+max_output_tokens = 256
+temperature = 0.8
+
+[training]
+epochs = 1
+lora_rank = 8
+max_context_length = 4096
+loss_method = "grpo"
+
+[wandb]
+enabled = true
+entity = "dunkeln"
+project = "browseruse-ft"
+api_key_env = "WANDB_API_KEY"
+
+[monitor]
+interval_seconds = 15
+no_progress_seconds = 600

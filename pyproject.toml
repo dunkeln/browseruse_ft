@@ -5,11 +5,28 @@ description = "Browser Use Cloud tools for a hosted Fireworks RFT evaluator"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "click>=8.3.1",
+    "datasets>=5.0.1",
+    "duckdb>=1.5.5",
+    "marimo[mcp]>=0.23.16",
+    "polars>=1.43.2",
     "browser-use-sdk==3.10.0",
     "eval-protocol==0.3.32",
     "playwright==1.62.0",
     "python-dotenv==1.2.2",
+    "rich>=14.2.0",
 ]
 
-[tool.uv]
-package = false
+[project.scripts]
+browseruse-data = "browseruse_ft.cli:download_data"
+browseruse-sft = "browseruse_ft.cli:prepare_sft"
+browseruse-rft = "browseruse_ft.cli:train_rft"
+browseruse-rft-eval = "browseruse_ft.cli:evaluate_rft_model"
+browseruse-rft-watch = "browseruse_ft.cli:watch_rft_job"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

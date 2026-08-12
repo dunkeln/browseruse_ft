@@ -1,12 +1,21 @@
 """Fireworks-hosted browser evaluator."""
 
 import json
+import os
 
 from dotenv import load_dotenv
 from eval_protocol import EvaluateResult, EvaluationRow
 from eval_protocol.pytest import AgentRolloutProcessor, evaluation_test
 
 load_dotenv()
+
+LOCAL_MODEL = os.environ.get(
+    "BROWSERUSE_EVAL_MODEL",
+    "fireworks_ai/accounts/fireworks/models/qwen3-vl-8b-instruct",
+)
+INPUT_DATASET = os.environ.get("BROWSERUSE_EVAL_DATASET", "evaluator/tasks.jsonl")
+MAX_OUTPUT_TOKENS = 256
+TEMPERATURE = 0.8
 
 
 def _terminal_result(row: EvaluationRow) -> dict:
@@ -22,13 +31,47 @@ def _terminal_result(row: EvaluationRow) -> dict:
     raise ValueError("rollout ended without a finish tool result")
 
 
+def _score_terminal_result(result: dict, task_id: str) -> float:
+    """Convert only a verified terminal state into binary task success."""
+    return float(
+        result.get("done") is True
+        and result.get("task_id") == task_id
+        and result.get("reward") == 1.0
+    )
+
+
+def reward_contract() -> dict[str, float]:
+    """Offline calibration used by the run-config preflight."""
+    scores = {
+        "success": _score_terminal_result(
+            {"done": True, "task_id": "task-1", "reward": 1.0}, "task-1"
+        ),
+        "failed_verifier": _score_terminal_result(
+            {"done": True, "task_id": "task-1", "reward": 0.0}, "task-1"
+        ),
+        "wrong_task": _score_terminal_result(
+            {"done": True, "task_id": "other", "reward": 1.0}, "task-1"
+        ),
+        "not_terminal": _score_terminal_result(
+            {"done": False, "task_id": "task-1", "reward": 1.0}, "task-1"
+        ),
+    }
+    assert scores == {
+        "success": 1.0,
+        "failed_verifier": 0.0,
+        "wrong_task": 0.0,
+        "not_terminal": 0.0,
+    }
+    return scores
+
+
 @evaluation_test(
-    input_dataset=["evaluator/tasks.jsonl"],
+    input_dataset=[INPUT_DATASET],
     completion_params=[
         {
-            "model": "fireworks_ai/accounts/fireworks/models/qwen3-4b",
-            "max_tokens": 256,
-            "temperature": 0.8,
+            "model": LOCAL_MODEL,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "temperature": TEMPERATURE,
         }
     ],
     rollout_processor=AgentRolloutProcessor(),
@@ -43,7 +86,7 @@ def test_browseruse(row: EvaluationRow) -> EvaluationRow:
     """Score only the terminal state emitted by the constrained browser tools."""
     result = _terminal_result(row)
     task_id = row.input_metadata.row_id
-    reward = float(result.get("reward", 0.0)) if result.get("task_id") == task_id else 0.0
+    reward = _score_terminal_result(result, task_id)
     row.evaluation_result = EvaluateResult(
         score=reward,
         reason=f"terminal browser verifier for {task_id}",
