@@ -6,9 +6,11 @@ import importlib.util
 import json
 import os
 import re
+import random
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -37,9 +39,9 @@ TERMINAL_STATES = {
 SECTIONS = {
     "run": {"job_id"},
     "fireworks": {"account_id"},
-    "evaluator": {"id", "entry", "secret_env"},
+    "evaluator": {"id", "entry"},
     "dataset": {"path", "rows"},
-    "evaluation": {"path", "rows"},
+    "evaluation": {"id", "max_concurrent_rollouts", "num_runs", "path", "rows"},
     "model": {"base_model", "output_model"},
     "rollout": {
         "chunk_size",
@@ -47,12 +49,14 @@ SECTIONS = {
         "max_concurrent_rollouts",
         "max_output_tokens",
         "response_candidates_count",
+        "steps",
         "temperature",
     },
     "training": {"epochs", "lora_rank", "loss_method", "max_context_length"},
     "wandb": {"api_key_env", "enabled", "entity", "project"},
     "monitor": {"interval_seconds", "no_progress_seconds"},
 }
+OPTIONAL_FIELDS = {"dataset": {"remote_id"}, "evaluator": {"secret_env"}}
 
 
 def _positive(config: dict, section: str, key: str) -> int:
@@ -84,8 +88,19 @@ def _load_dataset(path: Path) -> list[dict]:
                 raise TypeError(
                     f"invalid browser task contract at {path}:{line_number}"
                 )
-            required = {"html", "verify_selector", "verify_attribute", "verify_value"}
-            if not isinstance(metadata.get("row_id"), str) or required - session.keys():
+            required = {"verify_selector", "verify_attribute", "verify_value"}
+            has_content = isinstance(session.get("html"), str) or (
+                isinstance(session.get("pages"), dict)
+                and isinstance(session.get("start_path"), str)
+                and session["start_path"] in session["pages"]
+            )
+            is_miniwob = isinstance(session.get("task_name"), str) and isinstance(
+                session.get("seed"), int
+            )
+            if (
+                not isinstance(metadata.get("row_id"), str)
+                or (not is_miniwob and (required - session.keys() or not has_content))
+            ):
                 raise ValueError(
                     f"incomplete browser task contract at {path}:{line_number}"
                 )
@@ -115,7 +130,25 @@ def _load_evaluator(entry: str):
 
 
 def _validate_evaluator(config: dict) -> None:
-    module, evaluator = _load_evaluator(config["evaluator"]["entry"])
+    prefix = (
+        "MINIWOB"
+        if config["evaluator"]["entry"].startswith("evaluator/miniwob/")
+        else "BROWSERUSE"
+    )
+    overrides = {
+        f"{prefix}_EVAL_DATASET": config["dataset"]["path"],
+        f"{prefix}_MAX_STEPS": str(config["rollout"]["steps"]),
+    }
+    previous = {name: os.environ.get(name) for name in overrides}
+    os.environ.update(overrides)
+    try:
+        module, evaluator = _load_evaluator(config["evaluator"]["entry"])
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     params = getattr(evaluator, "__ep_params__", None)
     completions = getattr(params, "completion_params", None)
     if not params or not isinstance(completions, list) or len(completions) != 1:
@@ -144,6 +177,8 @@ def _validate_evaluator(config: dict) -> None:
         != rollout["max_concurrent_evaluations"]
     ):
         raise ValueError("evaluator max_concurrent_evaluations drifted from TOML")
+    if getattr(params, "steps", None) != rollout["steps"]:
+        raise ValueError("evaluator step budget drifted from TOML")
     reward_contract = getattr(module, "reward_contract", None)
     if not callable(reward_contract):
         raise TypeError("evaluator must expose reward_contract()")
@@ -165,7 +200,7 @@ def load_rft_config(path: Path) -> dict:
         values = config.get(section)
         if not isinstance(values, dict):
             raise TypeError(f"missing [{section}] section")
-        unknown = set(values) - allowed
+        unknown = set(values) - allowed - OPTIONAL_FIELDS.get(section, set())
         missing = allowed - set(values)
         if unknown or missing:
             raise ValueError(
@@ -192,6 +227,20 @@ def load_rft_config(path: Path) -> dict:
     evaluation_ids = {row["input_metadata"]["row_id"] for row in evaluation_rows}
     if training_ids & evaluation_ids:
         raise ValueError("training and evaluation row IDs must be disjoint")
+    training_templates = {
+        row["input_metadata"]["session_data"].get(
+            "template_id", row["input_metadata"]["row_id"]
+        )
+        for row in rows
+    }
+    evaluation_templates = {
+        row["input_metadata"]["session_data"].get(
+            "template_id", row["input_metadata"]["row_id"]
+        )
+        for row in evaluation_rows
+    }
+    if training_templates & evaluation_templates:
+        raise ValueError("training and evaluation template IDs must be disjoint")
 
     for section, key in (
         ("rollout", "chunk_size"),
@@ -199,6 +248,9 @@ def load_rft_config(path: Path) -> dict:
         ("rollout", "max_concurrent_rollouts"),
         ("rollout", "max_output_tokens"),
         ("rollout", "response_candidates_count"),
+        ("rollout", "steps"),
+        ("evaluation", "max_concurrent_rollouts"),
+        ("evaluation", "num_runs"),
         ("training", "epochs"),
         ("training", "lora_rank"),
         ("training", "max_context_length"),
@@ -217,14 +269,15 @@ def load_rft_config(path: Path) -> dict:
         or not 0 <= temperature <= 2
     ):
         raise ValueError("rollout.temperature must be between 0 and 2")
-    if config["training"]["loss_method"] not in {"grpo", "dapo", "gspo-token"}:
-        raise ValueError("training.loss_method must be grpo, dapo, or gspo-token")
+    if config["training"]["loss_method"] != "platform-default":
+        raise ValueError("training.loss_method must be platform-default")
 
     identifier = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
     for section, key in (
         ("run", "job_id"),
         ("evaluator", "id"),
         ("model", "output_model"),
+        ("evaluation", "id"),
     ):
         if not identifier.fullmatch(config[section][key]):
             raise ValueError(f"{section}.{key} must be a lowercase Fireworks ID")
@@ -236,11 +289,12 @@ def load_rft_config(path: Path) -> dict:
         raise ValueError("model.base_model must be a full public Fireworks model path")
     if not re.fullmatch(r"[a-z0-9-]+", config["fireworks"]["account_id"]):
         raise ValueError("fireworks.account_id is invalid")
-    if config["evaluator"]["secret_env"] not in {
+    if config["evaluator"].get("secret_env") not in {
+        None,
         "BROWSERUSE_API_KEY",
         "BROWSER_USE_API_KEY",
     }:
-        raise ValueError("evaluator.secret_env must name the Browser Use API key")
+        raise ValueError("evaluator.secret_env must be omitted or name the Browser Use API key")
     wandb = config["wandb"]
     if wandb["enabled"] is not True or wandb["api_key_env"] != "WANDB_API_KEY":
         raise ValueError('W&B must be enabled with api_key_env="WANDB_API_KEY"')
@@ -248,13 +302,17 @@ def load_rft_config(path: Path) -> dict:
         isinstance(wandb[key], str) and wandb[key] for key in ("entity", "project")
     ):
         raise ValueError("wandb.entity and wandb.project are required")
+    remote_dataset = config["dataset"].get("remote_id")
+    expected_dataset_prefix = f"accounts/{config['fireworks']['account_id']}/datasets/"
+    if remote_dataset and not remote_dataset.startswith(expected_dataset_prefix):
+        raise ValueError(f"dataset.remote_id must start with {expected_dataset_prefix}")
     _validate_evaluator(config)
     return config
 
 
 def build_rft_command(
     config: dict,
-    env_file: str = "<browser-key-env>",
+    env_file: str | None = "<browser-key-env>",
     wandb_api_key: str = "<wandb-key>",
 ) -> list[str]:
     """Map reviewed TOML values directly to the installed Eval Protocol CLI."""
@@ -265,6 +323,12 @@ def build_rft_command(
         shutil.which("ep") or "ep",
         "create",
         "rft",
+        "--skip-validation",
+        *(
+            ["--dataset", config["dataset"]["remote_id"]]
+            if config["dataset"].get("remote_id")
+            else []
+        ),
         "--evaluator",
         config["evaluator"]["id"],
         "--job-id",
@@ -272,15 +336,13 @@ def build_rft_command(
         "--base-model",
         config["model"]["base_model"],
         "--output-model",
-        config["model"]["output_model"],
+        f"accounts/{config['fireworks']['account_id']}/models/{config['model']['output_model']}",
         "--epochs",
         str(training["epochs"]),
         "--lora-rank",
         str(training["lora_rank"]),
         "--max-context-length",
         str(training["max_context_length"]),
-        "--method",
-        training["loss_method"],
         "--chunk-size",
         str(rollout["chunk_size"]),
         "--max-concurrent-evaluations",
@@ -300,18 +362,22 @@ def build_rft_command(
         wandb["entity"],
         "--wandb-project",
         wandb["project"],
-        "--env-file",
-        env_file,
+        *(
+            ["--env-file", env_file]
+            if config["evaluator"].get("secret_env") and env_file
+            else []
+        ),
     ]
 
 
 def build_evaluation_command(config: dict) -> list[str]:
     return [
-        shutil.which("ep") or "ep",
-        "local-test",
-        "--entry",
+        sys.executable,
+        "-m",
+        "pytest",
+        "--ep-success-threshold=-1e9",
         config["evaluator"]["entry"],
-        "--yes",
+        "-vs",
     ]
 
 
@@ -430,7 +496,225 @@ def watch_rft(path: Path, *, once: bool = False) -> dict:
             time.sleep(monitor["interval_seconds"])
 
 
-def evaluate_rft(path: Path, *, model: str, confirm: bool) -> None:
+def _failure_category(row: dict, score: float, step_count: int) -> str:
+    if score == 1.0:
+        return "success"
+    calls = [
+        (call["function"]["name"], call["function"].get("arguments", ""))
+        for message in row["messages"]
+        for call in message.get("tool_calls") or []
+    ]
+    if any(calls[index : index + 3] == [calls[index]] * 3 for index in range(len(calls) - 2)):
+        return "repeated_action_loop"
+    tool_text = " ".join(
+        str(message.get("content", "")).lower()
+        for message in row["messages"]
+        if message.get("role") == "tool"
+    )
+    if "unknown element_id" in tool_text or "error" in tool_text:
+        return "invalid_action"
+    terminal = '"terminal": true' in tool_text or '\\"terminal\\": true' in tool_text
+    oracle = row["input_metadata"].get("session_data", {}).get("oracle_steps", 0)
+    if terminal and step_count < oracle:
+        return "premature_finish"
+    if terminal:
+        return "verifier_failure"
+    return (
+        "step_budget_exhaustion"
+        if row.get("rollout_status", {}).get("code") == 100
+        else "runtime_failure"
+    )
+
+
+def _evaluation_metrics(output: Path) -> tuple[dict, list[list]]:
+    rows = [
+        json.loads(line)
+        for result in (output / "experiment_results").glob("*.jsonl")
+        for line in result.read_text().splitlines()
+        if line.strip()
+    ]
+    if not rows:
+        raise ValueError("held-out evaluation produced no result rows")
+    scores = [float(row["evals"]["score"]) for row in rows]
+    durations = [row["execution_metadata"]["rollout_duration_seconds"] for row in rows]
+    steps = [
+        sum(len(message.get("tool_calls") or []) for message in row["messages"])
+        for row in rows
+    ]
+    usages = [row["execution_metadata"].get("usage", {}) for row in rows]
+    failures = [
+        _failure_category(row, score, step_count)
+        for row, score, step_count in zip(rows, scores, steps)
+    ]
+    costs = [
+        row["execution_metadata"].get("cost_metrics", {}).get("total_cost_dollar") or 0
+        for row in rows
+    ]
+    metrics = {
+        "eval/success_rate": sum(scores) / len(scores),
+        "eval/successes": sum(scores),
+        "eval/rollouts": len(scores),
+        "eval/mean_steps": sum(steps) / len(steps),
+        "eval/mean_rollout_seconds": sum(durations) / len(durations),
+        "eval/mean_prompt_tokens": sum(u.get("prompt_tokens", 0) for u in usages)
+        / len(usages),
+        "eval/mean_completion_tokens": sum(
+            u.get("completion_tokens", 0) for u in usages
+        )
+        / len(usages),
+        "eval/invalid_action_rate": failures.count("invalid_action") / len(failures),
+        "eval/inference_cost_dollars": sum(costs),
+    }
+    table = []
+    for row, score, step_count, duration, failure, cost in zip(
+        rows, scores, steps, durations, failures, costs
+    ):
+        usage = row["execution_metadata"].get("usage", {})
+        session = row["input_metadata"].get("session_data", {})
+        table.append(
+            [
+                row["input_metadata"]["row_id"],
+                session.get("family_id", row["input_metadata"]["row_id"]),
+                session.get("oracle_steps"),
+                score,
+                step_count,
+                failure,
+                duration,
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+                cost,
+            ]
+        )
+    for failure in set(failures):
+        metrics[f"eval/failure/{failure}"] = failures.count(failure)
+    for task_id in {row[0] for row in table}:
+        task_scores = [row[3] for row in table if row[0] == task_id]
+        metrics[f"eval/task/{task_id}/success_rate"] = sum(task_scores) / len(
+            task_scores
+        )
+    return metrics, table
+
+
+def compare_evaluations(base: Path, tuned: Path) -> dict:
+    """Apply the pre-registered task-clustered held-out win rule."""
+    base_metrics, base_rows = _evaluation_metrics(base)
+    tuned_metrics, tuned_rows = _evaluation_metrics(tuned)
+
+    def task_scores(rows: list[list]) -> dict[str, float]:
+        task_ids = {row[0] for row in rows}
+        return {
+            task_id: sum(row[3] for row in rows if row[0] == task_id)
+            / sum(row[0] == task_id for row in rows)
+            for task_id in task_ids
+        }
+
+    base_scores, tuned_scores = task_scores(base_rows), task_scores(tuned_rows)
+    if base_scores.keys() != tuned_scores.keys():
+        raise ValueError("base and tuned evaluations must contain identical task IDs")
+    tasks = sorted(base_scores)
+    deltas = [tuned_scores[task] - base_scores[task] for task in tasks]
+    rng = random.Random(0)
+    bootstrap = sorted(
+        sum(deltas[rng.randrange(len(deltas))] for _ in deltas) / len(deltas)
+        for _ in range(10_000)
+    )
+    delta = sum(deltas) / len(deltas)
+    ci = [bootstrap[249], bootstrap[9749]]
+    families = {row[1] for row in base_rows}
+    family_deltas = {
+        family: sum(
+            tuned_scores[row[0]] - base_scores[row[0]]
+            for row in base_rows
+            if row[1] == family
+        )
+        / sum(row[1] == family for row in base_rows)
+        for family in families
+    }
+    result = {
+        "base_success_rate": base_metrics["eval/success_rate"],
+        "tuned_success_rate": tuned_metrics["eval/success_rate"],
+        "success_delta": delta,
+        "task_clustered_95_ci": ci,
+        "family_deltas": family_deltas,
+        "base_invalid_action_rate": base_metrics["eval/invalid_action_rate"],
+        "tuned_invalid_action_rate": tuned_metrics["eval/invalid_action_rate"],
+    }
+    result["win"] = (
+        delta >= 0.10
+        and ci[0] > 0
+        and min(family_deltas.values()) >= -0.10
+        and result["tuned_invalid_action_rate"]
+        <= result["base_invalid_action_rate"]
+    )
+    return result
+
+
+def _log_wandb_evaluation(
+    config: dict, *, model: str, model_path: str, deployment: str, output: Path
+) -> dict:
+    try:
+        import wandb
+    except ImportError as error:
+        raise ValueError("wandb is required to log held-out evaluation") from error
+    metrics, rows = _evaluation_metrics(output)
+    evaluation = config["evaluation"]
+    expected_rollouts = evaluation["rows"] * evaluation["num_runs"]
+    if metrics["eval/rollouts"] != expected_rollouts:
+        raise ValueError(
+            f"expected {expected_rollouts} held-out rollouts, "
+            f"found {metrics['eval/rollouts']}"
+        )
+    run = wandb.init(
+        entity=config["wandb"]["entity"],
+        project=config["wandb"]["project"],
+        group=evaluation["id"],
+        job_type="heldout-evaluation",
+        id=f"{evaluation['id']}-{model}-{output.name}",
+        name=f"{evaluation['id']}-{model}",
+        resume="allow",
+        config={
+            "model_variant": model,
+            "model": model_path,
+            "deployment": deployment,
+            "dataset": evaluation["path"],
+            "rows": evaluation["rows"],
+            "num_runs": evaluation["num_runs"],
+            "max_concurrent_rollouts": evaluation["max_concurrent_rollouts"],
+            "temperature": config["rollout"]["temperature"],
+            "max_output_tokens": config["rollout"]["max_output_tokens"],
+            "steps": config["rollout"]["steps"],
+        },
+        tags=["browser-use", "heldout", model],
+    )
+    run.log(
+        {
+            **metrics,
+            "eval/results": wandb.Table(
+                columns=[
+                    "task_id",
+                    "family_id",
+                    "oracle_steps",
+                    "score",
+                    "steps",
+                    "failure_category",
+                    "rollout_seconds",
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "inference_cost_dollars",
+                ],
+                data=rows,
+            ),
+        }
+    )
+    run.summary.update(metrics)
+    run.finish()
+    (output / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+    return metrics
+
+
+def evaluate_rft(
+    path: Path, *, model: str, deployment: str | None, confirm: bool
+) -> None:
     """Plan or run the same held-out verifier against base or tuned policy."""
     config = load_rft_config(path)
     load_dotenv(PROJECT_ROOT / ".env")
@@ -439,32 +723,83 @@ def evaluate_rft(path: Path, *, model: str, confirm: bool) -> None:
         if model == "base"
         else f"accounts/{config['fireworks']['account_id']}/models/{config['model']['output_model']}"
     )
+    evaluation = config["evaluation"]
+    if deployment and not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", deployment):
+        raise ValueError("--deployment must be a lowercase Fireworks ID")
+    deployment_path = (
+        f"accounts/{config['fireworks']['account_id']}/deployments/{deployment}"
+        if deployment
+        else "serverless"
+    )
+    served_model = f"{model_path}#{deployment_path}" if deployment else model_path
     command = build_evaluation_command(config)
     print(
-        f"model={model_path} heldout={config['evaluation']['path']} "
-        f"rows={config['evaluation']['rows']} metric=mean_binary_reward"
+        f"model={model_path} deployment={deployment_path} "
+        f"heldout={evaluation['path']} rows={evaluation['rows']} "
+        f"runs={evaluation['num_runs']} metric=mean_binary_reward"
     )
     print(shlex.join(command))
     if not confirm:
         print("plan only; pass --confirm to run paid held-out model evaluation")
         return
-    required = ("FIREWORKS_API_KEY", config["evaluator"]["secret_env"])
+    required = tuple(
+        name
+        for name in ("FIREWORKS_API_KEY", config["evaluator"].get("secret_env"))
+        if name
+    )
     missing = [name for name in required if not os.getenv(name)]
     if missing:
         raise ValueError(f"missing required secrets: {', '.join(missing)}")
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    output = (
+        PROJECT_ROOT / "fireworks-training-runs" / evaluation["id"] / model / timestamp
+    )
+    output.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
-    environment.update(
-        {
+    if config["evaluator"]["entry"].startswith("evaluator/miniwob/"):
+        evaluator_environment = {
+            "MINIWOB_EVAL_DATASET": config["evaluation"]["path"],
+            "MINIWOB_TASKS_PATH": config["evaluation"]["path"],
+            "MINIWOB_MAX_STEPS": str(config["rollout"]["steps"]),
+            "MINIWOB_EVAL_MODEL": f"fireworks_ai/{served_model}",
+        }
+    else:
+        evaluator_environment = {
             "BROWSERUSE_EVAL_DATASET": config["evaluation"]["path"],
             "BROWSERUSE_TASKS_PATH": config["evaluation"]["path"],
-            "BROWSERUSE_EVAL_MODEL": f"fireworks_ai/{model_path}",
+            "BROWSERUSE_MAX_STEPS": str(config["rollout"]["steps"]),
+            "BROWSERUSE_EVAL_MODEL": f"fireworks_ai/{served_model}",
+        }
+    environment.update(
+        {
+            **evaluator_environment,
+            "EP_DISABLE_AUTO_BROWSER": "1",
+            "EP_MAX_CONCURRENT_EVALUATIONS": str(evaluation["max_concurrent_rollouts"]),
+            "EP_MAX_CONCURRENT_ROLLOUTS": str(evaluation["max_concurrent_rollouts"]),
+            "EP_NO_UPLOAD": "1",
+            "EP_NUM_RUNS": str(evaluation["num_runs"]),
+            "EP_OUTPUT_DIR": str(output),
+            "EP_PRINT_SUMMARY": "1",
+            "EP_SUMMARY_JSON": str(output / "summary.json"),
         }
     )
+    if config["evaluator"]["entry"].startswith("evaluator/miniwob/"):
+        environment["MINIWOB_PYTHON"] = str(
+            PROJECT_ROOT / ".venv-browsergym" / "bin" / "python"
+        )
     result = subprocess.run(command, cwd=PROJECT_ROOT, env=environment, check=False)
     if result.returncode:
         raise ValueError(
             f"held-out evaluation failed with exit code {result.returncode}"
         )
+    metrics = _log_wandb_evaluation(
+        config,
+        model=model,
+        model_path=model_path,
+        deployment=deployment_path,
+        output=output,
+    )
+    print(json.dumps(metrics, indent=2))
 
 
 def run_rft(path: Path, *, confirm: bool, watch: bool = True) -> None:
@@ -474,10 +809,14 @@ def run_rft(path: Path, *, confirm: bool, watch: bool = True) -> None:
     rollout_count = (
         config["dataset"]["rows"] * config["rollout"]["response_candidates_count"]
     )
-    secret_names = (
-        "FIREWORKS_API_KEY",
-        config["evaluator"]["secret_env"],
-        config["wandb"]["api_key_env"],
+    secret_names = tuple(
+        name
+        for name in (
+            "FIREWORKS_API_KEY",
+            config["evaluator"].get("secret_env"),
+            config["wandb"]["api_key_env"],
+        )
+        if name
     )
     print(
         f"account={config['fireworks']['account_id']} model={config['model']['base_model']}"
@@ -504,23 +843,49 @@ def run_rft(path: Path, *, confirm: bool, watch: bool = True) -> None:
     if missing:
         raise ValueError(f"missing required secrets: {', '.join(missing)}")
     _live_preflight(config)
-    browser_key = os.environ[config["evaluator"]["secret_env"]]
+    evaluator_secret = config["evaluator"].get("secret_env")
     wandb_key = os.environ[config["wandb"]["api_key_env"]]
     launch_environment = os.environ.copy()
     for name in (
         "BROWSERUSE_EVAL_DATASET",
         "BROWSERUSE_EVAL_MODEL",
         "BROWSERUSE_TASKS_PATH",
+        "MINIWOB_EVAL_DATASET",
+        "MINIWOB_EVAL_MODEL",
+        "MINIWOB_TASKS_PATH",
     ):
         launch_environment.pop(name, None)
+    if config["evaluator"]["entry"].startswith("evaluator/miniwob/"):
+        evaluator_environment = {
+            "MINIWOB_EVAL_DATASET": str(PROJECT_ROOT / config["dataset"]["path"]),
+            "MINIWOB_MAX_STEPS": str(config["rollout"]["steps"]),
+            "MINIWOB_TASKS_PATH": str(PROJECT_ROOT / config["dataset"]["path"]),
+            "MINIWOB_PYTHON": str(
+                PROJECT_ROOT / ".venv-browsergym" / "bin" / "python"
+            ),
+        }
+    else:
+        evaluator_environment = {
+            "BROWSERUSE_EVAL_DATASET": config["dataset"]["path"],
+            "BROWSERUSE_MAX_STEPS": str(config["rollout"]["steps"]),
+            "BROWSERUSE_TASKS_PATH": config["dataset"]["path"],
+        }
+    launch_environment.update(evaluator_environment)
     with tempfile.NamedTemporaryFile(
-        mode="w", prefix="browseruse-rft-", suffix=".env"
+        mode="w", prefix="browser-rft-", suffix=".env"
     ) as env_file:
-        env_file.write(f"BROWSER_USE_API_KEY={browser_key}\n")
+        if evaluator_secret:
+            env_file.write(f"{evaluator_secret}={os.environ[evaluator_secret]}\n")
         env_file.flush()
         result = subprocess.run(
-            build_rft_command(config, env_file.name, wandb_key),
-            cwd=PROJECT_ROOT,
+            build_rft_command(
+                config, env_file.name if evaluator_secret else None, wandb_key
+            ),
+            cwd=(
+                PROJECT_ROOT / "evaluator" / "miniwob"
+                if config["evaluator"]["entry"].startswith("evaluator/miniwob/")
+                else PROJECT_ROOT
+            ),
             env=launch_environment,
             check=False,
         )

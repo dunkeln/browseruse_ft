@@ -3,6 +3,13 @@ __pycache__/
 *.egg-info/
 .env*
 .pytest_cache/
+.ruff_cache/
+.ep_tmp/
 .venv/
+.venv-browsergym/
+.browsergym/
+fireworks-training-runs/
+wandb/
 build/
 dist/
+.DS_Store

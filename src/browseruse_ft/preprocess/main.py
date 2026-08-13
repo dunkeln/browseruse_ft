@@ -2,6 +2,7 @@
 
 import json
 from collections import defaultdict
+from pathlib import Path
 
 from datasets import Dataset
 
@@ -98,3 +99,82 @@ def preprocess_sft(dataset: Dataset) -> tuple[Dataset, Dataset, dict[str, int]]:
         desc="Preprocessing SFT messages",
     )
     return rendered, quarantine, report
+
+
+def preprocess_rollouts(
+    results: Path, heldout_tasks: Path, *, max_context_chars: int
+) -> tuple[Dataset, Dataset, dict[str, int]]:
+    """Materialize complete verified trajectories without held-out leakage."""
+    heldout = [json.loads(line) for line in heldout_tasks.read_text().splitlines() if line]
+    blocked_ids = {row["input_metadata"]["row_id"] for row in heldout}
+    blocked_templates = {
+        row["input_metadata"]["session_data"].get("template_id") for row in heldout
+    }
+    accepted, quarantine = [], []
+    for path in sorted(results.glob("*.jsonl")):
+        for line in path.read_text().splitlines():
+            if not line:
+                continue
+            row = json.loads(line)
+            metadata = row.get("input_metadata", {})
+            session = metadata.get("session_data", {})
+            messages = row.get("messages", [])
+            reasons = []
+            if metadata.get("row_id") in blocked_ids or session.get("template_id") in blocked_templates:
+                reasons.append("heldout_leakage")
+            if row.get("rollout_status", {}).get("code") != 100:
+                reasons.append("unfinished_rollout")
+            if row.get("evaluation_result", {}).get("is_score_valid") is not True:
+                reasons.append("invalid_score")
+            terminal = None
+            for message in reversed(messages):
+                if message.get("role") != "tool" or not isinstance(
+                    message.get("content"), str
+                ):
+                    continue
+                try:
+                    candidate = json.loads(message["content"])
+                    if isinstance(candidate, dict) and isinstance(
+                        candidate.get("result"), str
+                    ):
+                        candidate = json.loads(candidate["result"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(candidate, dict) and candidate.get("terminal") is True:
+                    terminal = candidate
+                    break
+            if terminal is None:
+                reasons.append("missing_finish")
+            elif float(terminal.get("reward", -1)) != float(
+                row.get("evaluation_result", {}).get("score", -2)
+            ):
+                reasons.append("reward_mismatch")
+            serialized_chars = len(_canonical_key(messages))
+            if serialized_chars > max_context_chars:
+                reasons.append("over_context")
+            output = {
+                "source_rollout_id": row.get("execution_metadata", {}).get("rollout_id"),
+                "task_id": metadata.get("row_id"),
+                "family_id": session.get("family_id"),
+                "messages": messages,
+                "tools": row.get("tools", []),
+                "outcome": row.get("evaluation_result"),
+                "usage": row.get("execution_metadata", {}).get("usage", {}),
+                "rollout_duration_seconds": row.get("execution_metadata", {}).get(
+                    "rollout_duration_seconds"
+                ),
+                "serialized_chars": serialized_chars,
+            }
+            (quarantine if reasons else accepted).append(
+                {**output, **({"quarantine_reasons": reasons} if reasons else {})}
+            )
+    sizes = sorted(row["serialized_chars"] for row in accepted)
+    report = {
+        "accepted": len(accepted),
+        "quarantined": len(quarantine),
+        "context_chars_p95": sizes[min(len(sizes) - 1, int(len(sizes) * 0.95))]
+        if sizes
+        else 0,
+        "context_chars_max": sizes[-1] if sizes else 0,
+    }
+    return Dataset.from_list(accepted), Dataset.from_list(quarantine), report

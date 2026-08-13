@@ -15,13 +15,16 @@ dependencies = [
     "playwright==1.62.0",
     "python-dotenv==1.2.2",
     "rich>=14.2.0",
+    "wandb>=0.21.0",
 ]
 
 [project.scripts]
 browseruse-data = "browseruse_ft.cli:download_data"
 browseruse-sft = "browseruse_ft.cli:prepare_sft"
+browseruse-trajectories = "browseruse_ft.cli:prepare_trajectories"
 browseruse-rft = "browseruse_ft.cli:train_rft"
 browseruse-rft-eval = "browseruse_ft.cli:evaluate_rft_model"
+browseruse-rft-compare = "browseruse_ft.cli:compare_rft_models"
 browseruse-rft-watch = "browseruse_ft.cli:watch_rft_job"
 
 [build-system]

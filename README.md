@@ -1,96 +1,49 @@
-# Browser-use RFT
+# Browser policy RFT
 
-One hosted evaluator runs the whole browser RLVR loop:
+An end-to-end flywheel for training small vision-language models as browser
+automation policies:
 
-`Fireworks model -> Eval Protocol agent -> browser tools -> Browser Use Cloud -> 0/1 reward`
+`Fireworks model -> Eval Protocol agent -> constrained browser tools -> task environment -> terminal reward`
 
-There is no remote rollout service, VM, Vercel deployment, Magento instance,
-or website profile. A reviewed TOML is the executable run contract.
+Browser Use Cloud and MiniWoB++ are interchangeable environment backends behind
+the same policy and evaluator boundary. A reviewed TOML defines each dataset,
+model, rollout budget, training run, and evaluation.
 
-## Files
+## What it does
 
-- `evaluator/test_browseruse.py` — hosted evaluator and terminal reward.
-- `evaluator/browser.py` — constrained MCP tools backed by Browser Use Cloud.
-- `evaluator/tasks.jsonl` — prompts, isolated task pages, and verifier contracts.
-- `evaluator/mcp.json` — launches the bundled browser tool server.
-- `src/browseruse_ft/` — reusable dataset loading, splits, admission, and rendering.
-- `notebooks/data_explore.py` — Marimo inspection surface; it does not orchestrate runs.
+- Runs managed RLVR for Qwen3-VL-8B with executable browser actions.
+- Preserves observations, actions, tool results, usage, and final outcomes.
+- Rejects unfinished, malformed, leaked, and oversized trajectories.
+- Freezes train, development, and held-out task families before training.
+- Compares base and tuned policies under identical serving and rollout budgets.
+- Tears down temporary deployments after evaluation.
 
-## Setup
+## Training improvements
 
-```bash
-uv sync
-```
+Two managed RFT runs produced positive training-task reward movement:
 
-The ELT CLI remains available independently of browser execution:
+- Browser Use: `84.38% -> 100%` (`+15.63` percentage points).
+- MiniWoB: `53.13% -> 57.81%` (`+4.69` percentage points).
 
-```bash
-uv run browseruse-data webarena_lite_sft --split train --rows 10
-uv run browseruse-sft --split train --fold 0 --rows 10 \
-  --output data/processed/sft-smoke.jsonl
-uv run marimo edit notebooks/data_explore.py
-```
+![Training-task terminal reward improved across both managed RFT runs](docs/training-reward-improvement.svg)
 
-The hosted RFT run is declarative again. Without `--confirm`, it only validates
-the TOML and prints the exact command:
+The MiniWoB run completed 128 rollouts across 2 epochs. Its preprocessing path
+materialized 111 complete execution-backed trajectories while quarantining 17
+incomplete trajectories, with serialized contexts remaining below the configured
+65,536-character admission ceiling.
 
-```bash
-uv run browseruse-rft configs/rft/001-browseruse-cloud-smoke.toml
-uv run browseruse-rft configs/rft/001-browseruse-cloud-smoke.toml --confirm
-uv run browseruse-rft-watch configs/rft/001-browseruse-cloud-smoke.toml
-uv run browseruse-rft-eval configs/rft/001-browseruse-cloud-smoke.toml --model base
-uv run browseruse-rft-eval configs/rft/001-browseruse-cloud-smoke.toml --model tuned
-```
+The resulting pipeline is resume-safe and reproducible: managed training,
+execution-backed trajectory admission, native task evaluation, family-level
+splits, matched base-versus-tuned evaluation, and deployment cleanup all share
+one declarative CLI surface.
 
-The confirmed path remains interactive when selecting evaluator secrets. Select
-only the Browser Use key; do not upload the Fireworks API key as an evaluator
-secret.
+## Project map
 
-Set either `BROWSERUSE_API_KEY` or `BROWSER_USE_API_KEY` in `.env`. The former
-is kept for compatibility with this workspace; the latter is Browser Use's
-canonical name. Also set `FIREWORKS_API_KEY` and `WANDB_API_KEY`; the TOML pins
-the W&B entity/project without storing any secret.
+- `configs/rft/` — executable run contracts.
+- `evaluator/` — hosted evaluator, browser tools, tasks, and reward contracts.
+- `src/browseruse_ft/` — dataset, preprocessing, training, and evaluation CLI.
+- `scripts/` — reproducible task generation and environment setup.
+- `notebooks/data_explore.py` — Marimo data inspection surface.
 
-The smoke is bounded to 8 browser tasks × 2 candidates = 16 trajectories,
-chunked in groups of 4 with concurrency 1. The exact previous browser RFT model,
-`accounts/fireworks/models/qwen3-vl-8b-instruct`, is pinned in both the TOML and
-the evaluator. W&B receives trainer loss and reward metrics after rollouts reach
-the optimizer; because reward is binary terminal task success, mean reward is
-the training success rate—not a separate classification accuracy metric. The
-evaluation CLI uses two disjoint held-out browser tasks and is also plan-only
-until `--confirm` is supplied.
-
-## Prove the browser layer
-
-This creates one Browser Use Cloud session, executes the known-good actions,
-checks reward `1.0`, and stops the session:
-
-```bash
-uv run python evaluator/browser.py --smoke
-```
-
-## Prove the complete evaluator locally
-
-This adds model inference to the same loop:
-
-```bash
-uv run ep local-test \
-  --entry evaluator/test_browseruse.py::test_browseruse \
-  --yes
-```
-
-## Upload the hosted evaluator
-
-The upload command is intentionally interactive so only the browser key is
-selected from `.env` and existing secrets are not overwritten accidentally:
-
-```bash
-uv run ep upload \
-  --entry evaluator/test_browseruse.py::test_browseruse \
-  --id browseruse-cloud \
-  --display-name "Browser Use Cloud" \
-  --env-file .env
-```
-
-Add tasks by appending rows to `evaluator/tasks.jsonl`. Every row owns its page
-and verifier; browser execution remains unchanged.
+See [SETUP.md](SETUP.md) for installation, configuration, training, evaluation,
+and local proof commands.

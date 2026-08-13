@@ -8,6 +8,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from browser_use_sdk.v3 import AsyncBrowserUse
 from dotenv import load_dotenv
@@ -17,7 +18,9 @@ from playwright.async_api import Browser, Page, Playwright, async_playwright
 load_dotenv()
 
 TASKS_PATH = Path(
-    os.environ.get("BROWSERUSE_TASKS_PATH", Path(__file__).with_name("tasks.jsonl"))
+    os.environ.get(
+        "BROWSERUSE_TASKS_PATH", Path(__file__).with_name("long_train_tasks.jsonl")
+    )
 )
 TASKS = {
     row["input_metadata"]["row_id"]: row["input_metadata"]["session_data"]
@@ -74,25 +77,39 @@ def _active_page() -> Page:
     return _page
 
 
+async def _verifier_value(page: Page, task: dict) -> str | None:
+    locator = page.locator(task["verify_selector"])
+    if await locator.count() != 1:
+        return None
+    return await locator.get_attribute(task["verify_attribute"])
+
+
 async def _observe() -> dict:
     page = _active_page()
     elements = await page.locator(
         "a[href], button, input, select, textarea"
     ).evaluate_all(
-        """nodes => nodes.map((node, index) => {
+        """nodes => nodes.filter(node => node.getClientRects().length > 0).map((node, index) => {
           node.dataset.rlId = String(index);
           return {
             id: String(index),
             tag: node.tagName.toLowerCase(),
             label: node.getAttribute('aria-label') || node.innerText || node.name || '',
             type: node.getAttribute('type') || '',
-            value: node.value || ''
+            value: node.value || '',
+            checked: Boolean(node.checked)
           };
         })"""
     )
+    task = TASKS[_task_id]
+    actual = await _verifier_value(page, task)
+    reward = float(actual == task["verify_value"])
     return {
-        "text": (await page.locator("body").inner_text())[:4000],
+        "text": (await page.locator("body").inner_text())[:2400],
         "elements": elements,
+        "done": bool(reward),
+        "task_id": _task_id,
+        "reward": reward,
     }
 
 
@@ -119,17 +136,29 @@ async def open_task(task_id: str) -> str:
             _playwright = await async_playwright().start()
             _browser = await _playwright.chromium.connect_over_cdp(session.cdp_url)
             context = _browser.contexts[0]
-            # Remote lifecycle events can lag; write the isolated task directly.
             _page = await context.new_page()
-            await _page.evaluate(
-                """html => {
-                  window.stop();
-                  document.open();
-                  document.write(html);
-                  document.close();
-                }""",
-                task["html"],
-            )
+            if "pages" in task:
+                async def serve(route):
+                    request_url = urlsplit(route.request.url)
+                    html = task["pages"].get(request_url.path)
+                    if request_url.netloc != "task.local" or html is None:
+                        await route.abort()
+                    else:
+                        await route.fulfill(body=html, content_type="text/html")
+
+                await context.route("**/*", serve)
+                await _page.goto(f"https://task.local{task['start_path']}")
+            else:
+                # Remote lifecycle events can lag; write the isolated legacy task directly.
+                await _page.evaluate(
+                    """html => {
+                      window.stop();
+                      document.open();
+                      document.write(html);
+                      document.close();
+                    }""",
+                    task["html"],
+                )
             await _page.wait_for_selector("body")
             _task_id = task_id
             return json.dumps(await _observe())
@@ -172,10 +201,9 @@ async def finish() -> str:
             return json.dumps(_last_result)
         page, task_id = _active_page(), _task_id
         task = TASKS[task_id]
-        actual = await page.locator(task["verify_selector"]).get_attribute(
-            task["verify_attribute"]
-        )
+        actual = await _verifier_value(page, task)
         _last_result = {
+            "terminal": True,
             "done": True,
             "task_id": task_id,
             "reward": float(actual == task["verify_value"]),
@@ -199,9 +227,16 @@ for tool in (open_task, observe, click, type_text, finish):
 
 async def _smoke() -> None:
     try:
-        await open_task("form-submit-001")
-        await type_text("0", "violet-731")
-        await click("1")
+        await open_task(next(iter(TASKS)))
+        values = []
+        while await _active_page().locator("strong").count():
+            values.append(await _active_page().locator("strong").inner_text())
+            await click("0")
+        for element_id, value in enumerate(values):
+            await type_text(str(element_id), value)
+        await click(str(len(values)))
+        await click(str(len(values) + 1))
+        await click(str(len(values) + 2))
         result = json.loads(await finish())
         assert result["reward"] == 1.0, result
         print(json.dumps(result))

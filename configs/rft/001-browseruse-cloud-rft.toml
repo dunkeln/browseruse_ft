@@ -1,0 +1,53 @@
+schema_version = 1
+
+[run]
+job_id = "browseruse-q3vl8b-rft-v4"
+
+[fireworks]
+account_id = "prateekpravanjan"
+
+[evaluator]
+id = "browseruse-cloud"
+entry = "evaluator/test_browseruse.py::test_browseruse"
+secret_env = "BROWSERUSE_API_KEY"
+
+[dataset]
+path = "evaluator/tasks.jsonl"
+rows = 8
+remote_id = "accounts/prateekpravanjan/datasets/browseruse-cloud-dataset-20260812041423"
+
+[evaluation]
+id = "browseruse-q3vl8b-rft-v4-heldout-v1"
+path = "evaluator/heldout_tasks.jsonl"
+rows = 8
+num_runs = 2
+max_concurrent_rollouts = 2
+
+[model]
+base_model = "accounts/fireworks/models/qwen3-vl-8b-instruct"
+output_model = "browseruse-q3vl8b-rft-v4"
+
+[rollout]
+response_candidates_count = 4
+max_concurrent_rollouts = 1
+max_concurrent_evaluations = 1
+chunk_size = 8
+max_output_tokens = 256
+steps = 12
+temperature = 0.8
+
+[training]
+epochs = 2
+lora_rank = 16
+max_context_length = 4096
+loss_method = "platform-default"
+
+[wandb]
+enabled = true
+entity = "dunkeln"
+project = "browseruse-ft"
+api_key_env = "WANDB_API_KEY"
+
+[monitor]
+interval_seconds = 15
+no_progress_seconds = 600

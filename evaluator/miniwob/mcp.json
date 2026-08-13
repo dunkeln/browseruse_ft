@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "miniwob": {
+      "command": "sh",
+      "args": ["-c", "tasks=${MINIWOB_TASKS_PATH:-train_tasks.jsonl}; exec ${MINIWOB_PYTHON:-python} \"$(dirname \"$tasks\")/browser.py\""]
+    }
+  }
+}

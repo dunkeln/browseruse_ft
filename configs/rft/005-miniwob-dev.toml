@@ -1,0 +1,51 @@
+schema_version = 1
+
+[run]
+job_id = "miniwob-qwen3vl8b-rft-v1"
+
+[fireworks]
+account_id = "prateekpravanjan"
+
+[evaluator]
+id = "test-miniwob-test-miniwob"
+entry = "evaluator/miniwob/test_miniwob.py::test_miniwob"
+
+[dataset]
+path = "evaluator/miniwob/train_tasks.jsonl"
+rows = 16
+
+[evaluation]
+id = "miniwob-qwen3vl8b-rft-v1-dev"
+path = "evaluator/miniwob/dev_tasks.jsonl"
+rows = 16
+num_runs = 1
+max_concurrent_rollouts = 1
+
+[model]
+base_model = "accounts/fireworks/models/qwen3-vl-8b-instruct"
+output_model = "miniwob-qwen3vl8b-rft-v1"
+
+[rollout]
+response_candidates_count = 4
+max_concurrent_rollouts = 1
+max_concurrent_evaluations = 1
+chunk_size = 8
+max_output_tokens = 256
+steps = 20
+temperature = 0.8
+
+[training]
+epochs = 2
+lora_rank = 16
+max_context_length = 16384
+loss_method = "platform-default"
+
+[wandb]
+enabled = true
+entity = "dunkeln"
+project = "browseruse-ft"
+api_key_env = "WANDB_API_KEY"
+
+[monitor]
+interval_seconds = 15
+no_progress_seconds = 600

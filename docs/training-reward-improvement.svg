@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="480" viewBox="0 0 960 480" role="img" aria-labelledby="title desc">
+  <title id="title">Training-task terminal reward improved across both managed RFT runs</title>
+  <desc id="desc">Browser Use reward increased from 84.375 percent to 100 percent. MiniWoB reward increased from 53.125 percent to 57.8125 percent.</desc>
+  <rect width="960" height="480" rx="20" fill="#0b1020"/>
+  <text x="64" y="58" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="25" font-weight="700">Training reward improved in both managed RFT runs</text>
+  <text x="64" y="88" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="15">Observed epoch means · terminal verifier reward · Qwen3-VL-8B</text>
+
+  <g stroke="#263249" stroke-width="1">
+    <line x1="96" y1="130" x2="896" y2="130"/>
+    <line x1="96" y1="210" x2="896" y2="210"/>
+    <line x1="96" y1="290" x2="896" y2="290"/>
+    <line x1="96" y1="370" x2="896" y2="370"/>
+  </g>
+  <g fill="#94a3b8" font-family="system-ui, sans-serif" font-size="13" text-anchor="end">
+    <text x="82" y="135">100%</text>
+    <text x="82" y="215">80%</text>
+    <text x="82" y="295">60%</text>
+    <text x="82" y="375">40%</text>
+  </g>
+
+  <g fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">
+    <text x="270" y="416">Epoch 1</text>
+    <text x="690" y="416">Epoch 2</text>
+  </g>
+
+  <path d="M270 192.5 L690 130" fill="none" stroke="#38bdf8" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="270" cy="192.5" r="8" fill="#0b1020" stroke="#38bdf8" stroke-width="4"/>
+  <circle cx="690" cy="130" r="8" fill="#0b1020" stroke="#38bdf8" stroke-width="4"/>
+  <g fill="#e0f2fe" font-family="system-ui, sans-serif" font-size="15" font-weight="650">
+    <text x="214" y="180" text-anchor="end">84.38%</text>
+    <text x="710" y="122">100%</text>
+    <text x="730" y="151" fill="#38bdf8">Browser Use  +15.63 pp</text>
+  </g>
+
+  <path d="M270 317.5 L690 298.75" fill="none" stroke="#a78bfa" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="270" cy="317.5" r="8" fill="#0b1020" stroke="#a78bfa" stroke-width="4"/>
+  <circle cx="690" cy="298.75" r="8" fill="#0b1020" stroke="#a78bfa" stroke-width="4"/>
+  <g fill="#ede9fe" font-family="system-ui, sans-serif" font-size="15" font-weight="650">
+    <text x="214" y="322" text-anchor="end">53.13%</text>
+    <text x="710" y="292">57.81%</text>
+    <text x="730" y="321" fill="#a78bfa">MiniWoB  +4.69 pp</text>
+  </g>
+
+  <text x="96" y="454" fill="#64748b" font-family="system-ui, sans-serif" font-size="12">Raw provider-reported training reward; no smoothing applied because each run has two observed epoch means.</text>
+</svg>

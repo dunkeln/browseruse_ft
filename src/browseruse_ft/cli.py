@@ -1,5 +1,6 @@
 """Terminal entry points for the browser fine-tuning flywheel."""
 
+import json
 from pathlib import Path
 
 import click
@@ -11,8 +12,8 @@ from browseruse_ft.data import (
     load_task_split,
     write_jsonl,
 )
-from browseruse_ft.preprocess.main import preprocess_sft
-from browseruse_ft.rft import evaluate_rft, run_rft, watch_rft
+from browseruse_ft.preprocess.main import preprocess_rollouts, preprocess_sft
+from browseruse_ft.rft import compare_evaluations, evaluate_rft, run_rft, watch_rft
 
 
 @click.command()
@@ -70,6 +71,25 @@ def prepare_sft(split: str, fold: int | None, rows: int | None, output: Path) ->
 
 
 @click.command()
+@click.argument("results", type=click.Path(path_type=Path, exists=True, file_okay=False))
+@click.option("--heldout", type=click.Path(path_type=Path, exists=True, dir_okay=False), required=True)
+@click.option("--max-context-chars", type=click.IntRange(min=1), default=65536)
+@click.option("--output", type=click.Path(path_type=Path, dir_okay=False), required=True)
+def prepare_trajectories(
+    results: Path, heldout: Path, max_context_chars: int, output: Path
+) -> None:
+    """Preserve verified execution trajectories for review or later SFT."""
+    accepted, quarantine, report = preprocess_rollouts(
+        results, heldout, max_context_chars=max_context_chars
+    )
+    write_jsonl(accepted, output)
+    quarantine_path = output.with_name(f"{output.stem}.quarantine.jsonl")
+    if quarantine.num_rows:
+        write_jsonl(quarantine, quarantine_path)
+    click.echo(json.dumps(report, sort_keys=True))
+
+
+@click.command()
 @click.argument("config", type=click.Path(path_type=Path, exists=True, dir_okay=False))
 @click.option(
     "--confirm",
@@ -103,10 +123,29 @@ def watch_rft_job(config: Path, once: bool) -> None:
 @click.command()
 @click.argument("config", type=click.Path(path_type=Path, exists=True, dir_okay=False))
 @click.option("--model", type=click.Choice(("base", "tuned")), required=True)
+@click.option(
+    "--deployment",
+    help="Ready dedicated deployment ID used for this evaluation.",
+)
 @click.option("--confirm", is_flag=True, help="Run paid held-out model evaluation.")
-def evaluate_rft_model(config: Path, model: str, confirm: bool) -> None:
+def evaluate_rft_model(
+    config: Path, model: str, deployment: str | None, confirm: bool
+) -> None:
     """Evaluate base or tuned policy on the disjoint held-out browser tasks."""
     try:
-        evaluate_rft(config.resolve(), model=model, confirm=confirm)
+        evaluate_rft(
+            config.resolve(), model=model, deployment=deployment, confirm=confirm
+        )
+    except (OSError, TypeError, ValueError) as error:
+        raise click.ClickException(str(error)) from error
+
+
+@click.command()
+@click.argument("base", type=click.Path(path_type=Path, exists=True, file_okay=False))
+@click.argument("tuned", type=click.Path(path_type=Path, exists=True, file_okay=False))
+def compare_rft_models(base: Path, tuned: Path) -> None:
+    """Compare matched evaluation artifacts using the registered win rule."""
+    try:
+        click.echo(json.dumps(compare_evaluations(base, tuned), indent=2))
     except (OSError, TypeError, ValueError) as error:
         raise click.ClickException(str(error)) from error
