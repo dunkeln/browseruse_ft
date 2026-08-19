@@ -1,45 +1,98 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="480" viewBox="0 0 960 480" role="img" aria-labelledby="title desc">
-  <title id="title">Training-task terminal reward improved across both managed RFT runs</title>
-  <desc id="desc">Browser Use reward increased from 84.375 percent to 100 percent. MiniWoB reward increased from 53.125 percent to 57.8125 percent.</desc>
-  <rect width="960" height="480" rx="20" fill="#0b1020"/>
-  <text x="64" y="58" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="25" font-weight="700">Training reward improved in both managed RFT runs</text>
-  <text x="64" y="88" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="15">Observed epoch means · terminal verifier reward · Qwen3-VL-8B</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="700" viewBox="0 0 1000 700" role="img" aria-labelledby="title desc">
+  <title id="title">Measured signals from the MiniWoB RFT experiment</title>
+  <desc id="desc">Three panels show training reward gains, held-out execution reductions, and trajectory admission. Overall training reward gained 4.69 percentage points, driven by form sequence and autocomplete tasks. Repeated-action loops fell from 26 to 17 and rollout time fell from 17.415 to 17.274 seconds. Of 128 trajectories, 111 were admitted and 17 quarantined.</desc>
+  <style>
+    text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .title { font-size: 26px; font-weight: 720; fill: #172033; }
+    .subtitle, .context, .axis { fill: #667085; }
+    .subtitle { font-size: 15px; }
+    .panel-title { font-size: 17px; font-weight: 700; fill: #172033; }
+    .panel-note, .context, .axis { font-size: 12px; }
+    .category { font-size: 13px; font-weight: 600; fill: #344054; }
+    .value { font-size: 13px; font-weight: 720; fill: #172033; }
+    .positive { fill: #067647; }
+    .blue { fill: #2563eb; }
+    .blue-soft { fill: #93b4f6; }
+    .green { fill: #12b76a; }
+    .green-soft { fill: #a6f4c5; }
+    .amber { fill: #fdb022; }
+    .grid { stroke: #e4e7ec; stroke-width: 1; }
+    .baseline { stroke: #98a2b3; stroke-width: 1.25; }
+    .panel { fill: #ffffff; stroke: #d0d5dd; stroke-width: 1; }
+  </style>
 
-  <g stroke="#263249" stroke-width="1">
-    <line x1="96" y1="130" x2="896" y2="130"/>
-    <line x1="96" y1="210" x2="896" y2="210"/>
-    <line x1="96" y1="290" x2="896" y2="290"/>
-    <line x1="96" y1="370" x2="896" y2="370"/>
-  </g>
-  <g fill="#94a3b8" font-family="system-ui, sans-serif" font-size="13" text-anchor="end">
-    <text x="82" y="135">100%</text>
-    <text x="82" y="215">80%</text>
-    <text x="82" y="295">60%</text>
-    <text x="82" y="375">40%</text>
+  <rect width="1000" height="700" fill="#ffffff"/>
+  <text class="title" x="56" y="50">MiniWoB RFT: measured training, execution, and data signals</text>
+  <text class="subtitle" x="56" y="78">Qwen3-VL-8B · 128 training rollouts · 96 matched held-out evaluation rollouts</text>
+
+  <g aria-label="Training reward gains">
+    <rect class="panel" x="56" y="112" width="888" height="246" rx="8"/>
+    <text class="panel-title" x="82" y="144">Training reward gain</text>
+    <text class="panel-note context" x="82" y="165">Percentage-point change from epoch 1 to epoch 2; two of seven task families improved.</text>
+
+    <line class="grid" x1="288" y1="184" x2="288" y2="319"/>
+    <line class="grid" x1="448" y1="184" x2="448" y2="319"/>
+    <line class="grid" x1="608" y1="184" x2="608" y2="319"/>
+    <line class="grid" x1="768" y1="184" x2="768" y2="319"/>
+    <line class="baseline" x1="288" y1="319" x2="848" y2="319"/>
+    <text class="axis" x="288" y="339" text-anchor="middle">0</text>
+    <text class="axis" x="448" y="339" text-anchor="middle">10</text>
+    <text class="axis" x="608" y="339" text-anchor="middle">20</text>
+    <text class="axis" x="768" y="339" text-anchor="middle">30 pp</text>
+
+    <text class="category" x="268" y="211" text-anchor="end">Form sequence</text>
+    <rect class="blue" x="288" y="194" width="400" height="24" rx="3"/>
+    <text class="value" x="700" y="211">+25.0 pp</text>
+    <text class="context" x="778" y="211">+2 rewarded rollouts (n=8)</text>
+
+    <text class="category" x="268" y="258" text-anchor="end">Use autocomplete</text>
+    <rect class="blue-soft" x="288" y="241" width="200" height="24" rx="3"/>
+    <text class="value" x="500" y="258">+12.5 pp</text>
+    <text class="context" x="578" y="258">+1 rewarded rollout (n=8)</text>
+
+    <text class="category" x="268" y="305" text-anchor="end">Overall reward</text>
+    <rect class="green" x="288" y="288" width="75" height="24" rx="3"/>
+    <text class="value positive" x="375" y="305">+4.69 pp</text>
+    <text class="context" x="453" y="305">+3 rewarded rollouts (n=64)</text>
   </g>
 
-  <g fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">
-    <text x="270" y="416">Epoch 1</text>
-    <text x="690" y="416">Epoch 2</text>
+  <g aria-label="Held-out execution reductions">
+    <rect class="panel" x="56" y="378" width="570" height="250" rx="8"/>
+    <text class="panel-title" x="82" y="410">Held-out execution reductions</text>
+    <text class="panel-note context" x="82" y="431">Relative reduction from base to tuned; lower is better.</text>
+
+    <line class="grid" x1="268" y1="452" x2="268" y2="573"/>
+    <line class="grid" x1="363" y1="452" x2="363" y2="573"/>
+    <line class="grid" x1="458" y1="452" x2="458" y2="573"/>
+    <line class="baseline" x1="268" y1="573" x2="553" y2="573"/>
+    <text class="axis" x="268" y="594" text-anchor="middle">0</text>
+    <text class="axis" x="363" y="594" text-anchor="middle">15%</text>
+    <text class="axis" x="458" y="594" text-anchor="middle">30%</text>
+
+    <text class="category" x="248" y="483" text-anchor="end">Repeated loops</text>
+    <rect class="green" x="268" y="466" width="219" height="24" rx="3"/>
+    <text class="value positive" x="499" y="483">−34.6%</text>
+    <text class="context" x="499" y="501">26 → 17</text>
+
+    <text class="category" x="248" y="546" text-anchor="end">Rollout time</text>
+    <rect class="green-soft" x="268" y="529" width="5" height="24" rx="2"/>
+    <text class="value positive" x="285" y="546">−0.8%</text>
+    <text class="context" x="351" y="546">17.415s → 17.274s</text>
   </g>
 
-  <path d="M270 192.5 L690 130" fill="none" stroke="#38bdf8" stroke-width="5" stroke-linecap="round"/>
-  <circle cx="270" cy="192.5" r="8" fill="#0b1020" stroke="#38bdf8" stroke-width="4"/>
-  <circle cx="690" cy="130" r="8" fill="#0b1020" stroke="#38bdf8" stroke-width="4"/>
-  <g fill="#e0f2fe" font-family="system-ui, sans-serif" font-size="15" font-weight="650">
-    <text x="214" y="180" text-anchor="end">84.38%</text>
-    <text x="710" y="122">100%</text>
-    <text x="730" y="151" fill="#38bdf8">Browser Use  +15.63 pp</text>
+  <g aria-label="Trajectory admission">
+    <rect class="panel" x="646" y="378" width="298" height="250" rx="8"/>
+    <text class="panel-title" x="672" y="410">Trajectory admission</text>
+    <text class="panel-note context" x="672" y="431">Execution-backed preprocessing</text>
+
+    <rect class="green" x="672" y="475" width="213" height="42" rx="4"/>
+    <rect class="amber" x="885" y="475" width="33" height="42" rx="4"/>
+    <text class="value" x="672" y="460">128 provider rollouts</text>
+    <text class="value" x="672" y="546">111 admitted</text>
+    <text class="context" x="672" y="566">86.7% complete trajectories</text>
+    <text class="value" x="918" y="596" text-anchor="end">17 quarantined</text>
+    <text class="context" x="918" y="614" text-anchor="end">missing terminal finish</text>
   </g>
 
-  <path d="M270 317.5 L690 298.75" fill="none" stroke="#a78bfa" stroke-width="5" stroke-linecap="round"/>
-  <circle cx="270" cy="317.5" r="8" fill="#0b1020" stroke="#a78bfa" stroke-width="4"/>
-  <circle cx="690" cy="298.75" r="8" fill="#0b1020" stroke="#a78bfa" stroke-width="4"/>
-  <g fill="#ede9fe" font-family="system-ui, sans-serif" font-size="15" font-weight="650">
-    <text x="214" y="322" text-anchor="end">53.13%</text>
-    <text x="710" y="292">57.81%</text>
-    <text x="730" y="321" fill="#a78bfa">MiniWoB  +4.69 pp</text>
-  </g>
-
-  <text x="96" y="454" fill="#64748b" font-family="system-ui, sans-serif" font-size="12">Raw provider-reported training reward; no smoothing applied because each run has two observed epoch means.</text>
+  <text class="context" x="56" y="667">Exact observed measurements. Training reward is in-sample; execution metrics use the frozen held-out run.</text>
 </svg>
